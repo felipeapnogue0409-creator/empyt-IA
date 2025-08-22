@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Empyt IA</title> <!-- Nome que aparece na aba -->
+  <style>
+    :root { --bg:#f6f7fb; --card:#ffffff; --primary:#2563eb; --muted:#6b7280; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:#111827; }
+    .app { max-width: 900px; margin: 24px auto; padding: 16px; }
+    .header { display:flex; gap:12px; align-items:center; justify-content:space-between; }
+    .title { font-size: 20px; font-weight: 700; }
+    .hint { color: var(--muted); font-size: 13px; }
+    .card { background:var(--card); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.06); overflow:hidden; }
+    .row { display:flex; gap:12px; }
+    .chat { display:grid; grid-template-rows: 1fr auto; height: 70vh; min-height:520px; }
+    .messages { padding: 18px; overflow:auto; }
+    .bubble { max-width: 82%; margin: 8px 0; padding: 12px 14px; border-radius: 12px; line-height: 1.35; white-space: pre-wrap; word-wrap: break-word; }
+    .user { margin-left:auto; background:#e5edff; }
+    .bot { margin-right:auto; background:#f3f4f6; }
+    .inputbar { display:flex; gap:8px; padding: 12px; border-top: 1px solid #e5e7eb; }
+    input[type="text"] { flex:1; border:1px solid #d1d5db; border-radius: 10px; padding: 12px; font-size: 15px; }
+    button { background:var(--primary); color:#fff; border:none; border-radius: 10px; padding: 10px 14px; font-weight: 600; cursor: pointer; }
+    button.secondary { background:#111827; }
+    button.ghost { background:transparent; color:#111827; border:1px solid #d1d5db; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:8px; padding: 12px; border-top:1px solid #e5e7eb; }
+    .small { font-size:12px; color:var(--muted); }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#111827; color:#fff; padding:2px 6px; border-radius:6px; font-size:12px; }
+    .file { display:none; }
+    .pill { background:#eef2ff; color:#3730a3; border-radius:999px; padding:4px 8px; font-size:12px; }
+    .hr { height:1px; background:#e5e7eb; margin:10px 0; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <div>
+        <div class="title">Empyt IA</div> <!-- Nome dentro da página -->
+        <div class="hint">100% local, com base externa <span class="pill">base.json</span>, aprendizado e exportação.</div>
+      </div>
+      <div class="small">Comandos: <span class="kbd">/help</span> <span class="kbd">/calc 2*(3+4)</span> <span class="kbd">/sorteio a,b,c</span> <span class="kbd">/tabuada 7</span> <span class="kbd">/agora</span></div>
+    </div>
+
+    <div class="card chat" id="chat-card">
+      <div class="messages" id="messages"></div>
+      <div class="toolbar">
+        <button id="btn-import" class="ghost">Importar base.json</button>
+        <input type="file" id="file" class="file" accept="application/json" />
+        <button id="btn-export" class="ghost">Exportar aprendido (.json)</button>
+        <button id="btn-clear" class="ghost">Limpar aprendido</button>
+        <button id="btn-help" class="ghost">Ajuda</button>
+      </div>
+      <div class="inputbar">
+        <input id="input" type="text" placeholder="Pergunte algo… (ex.: qual a capital do brasil)" autocomplete="off" />
+        <button id="send">Enviar</button>
+      </div>
+    </div>
+
+    <div class="small" style="margin-top:8px">
+      Dica: coloque um arquivo <strong>base.json</strong> na mesma pasta que este HTML para carregar milhares de Q&A automaticamente. Veja o modelo no topo do arquivo.
+    </div>
+  </div>
+
+<script>
+// =============================
+// 📁 MODELO DE base.json (coloque na mesma pasta):
+// {
+//   "perguntas": [
+//     ["qual a capital do brasil", "Brasília"],
+//     ["quem foi albert einstein", "Físico teórico, criador da Teoria da Relatividade."],
+//     ["qual o maior planeta", "Júpiter"],
+//     ["quanto é 12*12", "144"],
+//     ["quem pintou a mona lisa", "Leonardo da Vinci"]
+//   ]
+// }
+// =============================
+
+// Utilidades
+const el = (id) => document.getElementById(id);
+const messages = el('messages');
+const input = el('input');
+const sendBtn = el('send');
+const fileBtn = el('file');
+const btnImport = el('btn-import');
+const btnExport = el('btn-export');
+const btnClear = el('btn-clear');
+const btnHelp = el('btn-help');
+
+// Normalização
+function normalize(str){
+  return str
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// UI
+function addBubble(text, who='bot'){
+  const div = document.createElement('div');
+  div.className = `bubble ${who === 'user' ? 'user' : 'bot'}`;
+  div.textContent = text;
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function intro(){
+  addBubble('Olá! Eu sou sua Empyt IA. Faça uma pergunta ou digite /help para ver comandos.');
+}
+
+// ===== Conhecimento =====
+const fallbackPairs = [
+  ["olá", "Olá! Como posso te ajudar hoje?"],
+  ["oi", "Oi! Tudo bem?"],
+  ["qual a capital do brasil", "Brasília"],
+  ["qual a capital da frança", "Paris"],
+  ["quem foi albert einstein", "Físico teórico, criador da Teoria da Relatividade."],
+  ["qual o maior planeta", "Júpiter"],
+  ["quem pintou a mona lisa", "Leonardo da Vinci"],
+  ["quanto é 2 + 2", "4"]
+];
+
+const base = new Map();
+const learned = new Map();
+
+function loadPairsInto(map, pairs){
+  for(const [q,a] of pairs){
+    if(typeof q === 'string' && typeof a === 'string'){
+      map.set(normalize(q), a.trim());
+    }
+  }
+}
+
+// Carregar aprendidos do localStorage
+(function restoreLearned(){
+  try{
+    const raw = localStorage.getItem('ia_offline_learned');
+    if(raw){
+      const arr = JSON.parse(raw);
+      if(Array.isArray(arr)) loadPairsInto(learned, arr);
+    }
+  }catch(e){ console.warn('Falha ao restaurar aprendidos', e); }
+})();
+
+// Salvar aprendidos
+function persistLearned(){
+  const arr = Array.from(learned.entries()).map(([q,a])=>[q,a]);
+  localStorage.setItem('ia_offline_learned', JSON.stringify(arr));
+}
+
+// Importar base externa
+async function tryLoadExternalBase(){
+  try{
+    const res = await fetch('base.json', { cache:'no-store' });
+    if(!res.ok) throw new Error('sem base.json');
+    const data = await res.json();
+    let pairs = [];
+    if(Array.isArray(data?.perguntas)){
+      pairs = data.perguntas;
+    } else if (data && typeof data === 'object') {
+      pairs = Object.entries(data);
+    }
+    if(pairs.length){
+      loadPairsInto(base, pairs);
+      addBubble(`Base externa carregada: ${pairs.length.toLocaleString('pt-BR')} itens. ✅`);
+      return true;
+    }
+  }catch(e){ }
+  return false;
+}
+
+// Fallback
+function loadFallback(){
+  loadPairsInto(base, fallbackPairs);
+  addBubble('Carreguei a base interna básica (fallback).');
+}
+
+// Busca
+function findAnswer(query){
+  const qn = normalize(query);
+  if(learned.has(qn)) return learned.get(qn);
+  if(base.has(qn)) return base.get(qn);
+  return null;
+}
+
+// Aprender
+async function learnFlow(userQ){
+  const ans = prompt('Digite a resposta que devo aprender para: "' + userQ + '"');
+  if(ans && ans.trim()){
+    learned.set(normalize(userQ), ans.trim());
+    persistLearned();
+    addBubble('Aprendi! Vou lembrar disso. 😎');
+  } else {
+    addBubble('Sem problemas. Se quiser, pergunte outra coisa ou use /help.');
+  }
+}
+
+// Comandos
+function handleCommand(text){
+  const t = text.trim();
+  if(t === '/help'){
+    return `Comandos:\n• /help\n• /calc EXPRESSAO\n• /sorteio itens\n• /tabuada N\n• /agora\n• /definir pergunta :: resposta`;
+  }
+  if(t.startsWith('/calc ')){
+    const expr = t.slice(6);
+    try { return `${expr} = ${Function('"use strict";return('+expr+')')()}`; }
+    catch(e){ return 'Erro no cálculo.'; }
+  }
+  return null;
+}
+
+// Eventos
+sendBtn.addEventListener('click', onSend);
+input.addEventListener('keydown', (e)=>{ if(e.key==='Enter') onSend(); });
+btnHelp.addEventListener('click', ()=>{ addBubble(handleCommand('/help')); });
+btnClear.addEventListener('click', ()=>{ learned.clear(); persistLearned(); addBubble('Aprendizados limpos.'); });
+
+// Enviar
+async function onSend(){
+  const q = input.value.trim();
+  if(!q) return;
+  addBubble(q, 'user');
+  input.value = '';
+
+  const cmd = handleCommand(q);
+  if(cmd){ addBubble(cmd); return; }
+
+  const ans = findAnswer(q);
+  if(ans){ addBubble(ans); return; }
+
+  await learnFlow(q);
+}
+
+// Inicialização
+(async function init(){
+  const ok = await tryLoadExternalBase();
+  if(!ok) loadFallback();
+  intro();
+})();
+</script>
+</body>
+</html>
